@@ -114,6 +114,14 @@ class TestDateMath(unittest.TestCase):
         result = sst.date_math(entries)
         self.assertEqual(result["days_since_last"], 1)
 
+    def test_days_since_last_never_negative_for_future_date(self):
+        tomorrow = date.today() + timedelta(days=1)
+        entries = [
+            sst.ShiftEntry("1", tomorrow.isoformat(), "night", 6.0, 8),
+        ]
+        result = sst.date_math(entries)
+        self.assertEqual(result["days_since_last"], 0)
+
 
 class TestParseEntries(unittest.TestCase):
     def test_parse_entries(self):
@@ -152,6 +160,75 @@ class TestCliExport(unittest.TestCase):
         self.assertEqual(len(reader), 1)
         self.assertEqual(reader[0]["date"], "2026-10-01")
         self.assertEqual(reader[0]["shift_type"], "night")
+
+
+class TestCliEditDelete(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.data_path = os.path.join(self.tmpdir, "data.json")
+        self.storage = sst.ShiftStorage(self.data_path)
+        self.storage.add(
+            sst.ShiftEntry("1", "2026-10-01", "night", 6.0, 8, "notes here")
+        )
+
+    def test_edit_updates_fields(self):
+        args = type("A", (), {
+            "entry_id": "1", "date": "2026-10-02", "shift": "day",
+            "hours_slept": 5.0, "fatigue": 3, "notes": "updated notes",
+        })()
+        result = sst.cmd_edit(args, self.storage)
+        self.assertEqual(result, 0)
+        entries = self.storage.load()
+        self.assertEqual(entries[0]["date"], "2026-10-02")
+        self.assertEqual(entries[0]["shift_type"], "day")
+        self.assertEqual(entries[0]["hours_slept"], 5.0)
+        self.assertEqual(entries[0]["fatigue_rating"], 3)
+        self.assertEqual(entries[0]["notes"], "updated notes")
+
+    def test_edit_nonexistent_returns_error(self):
+        args = type("A", (), {
+            "entry_id": "99", "date": None, "shift": None,
+            "hours_slept": None, "fatigue": None, "notes": None,
+        })()
+        result = sst.cmd_edit(args, self.storage)
+        self.assertEqual(result, 1)
+
+    def test_edit_no_fields_returns_error(self):
+        args = type("A", (), {
+            "entry_id": "1", "date": None, "shift": None,
+            "hours_slept": None, "fatigue": None, "notes": None,
+        })()
+        # notes=None is distinguishable; use a namespace with all None to trigger
+        result = sst.cmd_edit(args, self.storage)
+        self.assertEqual(result, 1)
+
+    def test_delete_removes_entry(self):
+        args = type("A", (), {"entry_id": "1"})()
+        result = sst.cmd_delete(args, self.storage)
+        self.assertEqual(result, 0)
+        self.assertEqual(self.storage.load(), [])
+
+    def test_delete_nonexistent_returns_error(self):
+        args = type("A", (), {"entry_id": "99"})()
+        result = sst.cmd_delete(args, self.storage)
+        self.assertEqual(result, 1)
+
+
+class TestCliList(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.data_path = os.path.join(self.tmpdir, "data.json")
+        self.storage = sst.ShiftStorage(self.data_path)
+        self.storage.add(
+            sst.ShiftEntry("1", "2026-10-01", "night", 6.0, 8, "notes here")
+        )
+
+    def test_list_prints_entries(self):
+        args = type("A", (), {})()
+        sst.cmd_list(args, self.storage)
+        raw = self.storage.load()
+        self.assertEqual(len(raw), 1)
+        self.assertEqual(raw[0]["date"], "2026-10-01")
 
 
 class TestValidation(unittest.TestCase):

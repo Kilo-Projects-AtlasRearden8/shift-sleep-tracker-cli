@@ -73,6 +73,23 @@ class ShiftStorage:
         entries.append(asdict(entry))
         self.save(entries)
 
+    def update(self, entry_id: str, fields: dict) -> bool:
+        entries = self.load()
+        for item in entries:
+            if str(item.get("entry_id")) == str(entry_id):
+                item.update(fields)
+                self.save(entries)
+                return True
+        return False
+
+    def delete(self, entry_id: str) -> bool:
+        entries = self.load()
+        filtered = [e for e in entries if str(e.get("entry_id")) != str(entry_id)]
+        if len(filtered) == len(entries):
+            return False
+        self.save(filtered)
+        return True
+
 
 def next_entry_id(entries: list[dict]) -> str:
     if not entries:
@@ -171,11 +188,12 @@ def date_math(entries: list[ShiftEntry]) -> dict:
     earliest = min(dates)
     latest = max(dates)
     today = date.today()
+    days_since = (today - latest).days
     return {
         "earliest_date": earliest.isoformat(),
         "latest_date": latest.isoformat(),
         "days_between": (latest - earliest).days,
-        "days_since_last": (today - latest).days,
+        "days_since_last": max(0, days_since),
     }
 
 
@@ -225,6 +243,41 @@ def cmd_totals(args, storage: ShiftStorage) -> int:
     return 0
 
 
+def cmd_edit(args, storage: ShiftStorage) -> int:
+    print(DISCLAIMER)
+    fields = {}
+    if args.date is not None:
+        fields["date"] = args.date
+    if args.shift is not None:
+        fields["shift_type"] = args.shift
+    if args.hours_slept is not None:
+        fields["hours_slept"] = args.hours_slept
+    if args.fatigue is not None:
+        fields["fatigue_rating"] = args.fatigue
+    if args.notes is not None:
+        fields["notes"] = args.notes
+    if not fields:
+        print("Nothing to update. Provide at least one of --date, --shift, "
+              "--hours-slept, --fatigue, --notes.")
+        return 1
+    if storage.update(args.entry_id, fields):
+        print(f"Updated shift #{args.entry_id}.")
+    else:
+        print(f"No shift found with id #{args.entry_id}.")
+        return 1
+    return 0
+
+
+def cmd_delete(args, storage: ShiftStorage) -> int:
+    print(DISCLAIMER)
+    if storage.delete(args.entry_id):
+        print(f"Deleted shift #{args.entry_id}.")
+    else:
+        print(f"No shift found with id #{args.entry_id}.")
+        return 1
+    return 0
+
+
 def cmd_export(args, storage: ShiftStorage) -> int:
     print(DISCLAIMER)
     entries = parse_entries(storage.load())
@@ -252,6 +305,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="shift_sleep_tracker",
         description="Log shift sleep and fatigue patterns (education only).",
     )
+    parser.add_argument("--data-file", default=None,
+                        help="Path to the JSON data file. Defaults to "
+                             "~/.shift_sleep_tracker.json.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_add = sub.add_parser("add", help="Add a shift sleep/fatigue log entry")
@@ -279,13 +335,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_disclaimer = sub.add_parser("disclaimer", help="Show the education-only disclaimer")
     p_disclaimer.set_defaults(func=cmd_disclaimer)
 
+    p_edit = sub.add_parser("edit", help="Edit an existing shift entry by id")
+    p_edit.add_argument("entry_id", help="Id of the entry to edit")
+    p_edit.add_argument("--date", type=validate_date, default=None,
+                        help="New shift date (YYYY-MM-DD)")
+    p_edit.add_argument("--shift", type=validate_shift_type, default=None,
+                        help="New shift type: day or night")
+    p_edit.add_argument("--hours-slept", type=validate_hours, default=None,
+                        help="New hours slept")
+    p_edit.add_argument("--fatigue", type=validate_fatigue, default=None,
+                        help="New fatigue rating 1-10")
+    p_edit.add_argument("--notes", default=None,
+                        help="New notes (use empty string to clear)")
+    p_edit.set_defaults(func=cmd_edit)
+
+    p_delete = sub.add_parser("delete", help="Delete a shift entry by id")
+    p_delete.add_argument("entry_id", help="Id of the entry to delete")
+    p_delete.set_defaults(func=cmd_delete)
+
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    storage = ShiftStorage(DEFAULT_DATA_FILE)
+    data_file = Path(args.data_file) if args.data_file else DEFAULT_DATA_FILE
+    storage = ShiftStorage(data_file)
     return args.func(args, storage)
 
 
